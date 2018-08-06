@@ -31,6 +31,7 @@ module Faktory
       setup_options(args)
       initialize_logger
       validate!
+      daemonize
     end
 
     def jruby?
@@ -148,6 +149,36 @@ module Faktory
       end
     end
 
+    def daemonize
+      return unless options[:daemon]
+
+      raise ArgumentError, "You really should set a logfile if you're going to daemonize" unless options[:logfile]
+      files_to_reopen = []
+      ObjectSpace.each_object(File) do |file|
+        files_to_reopen << file unless file.closed?
+      end
+
+      ::Process.daemon(true, true)
+
+      files_to_reopen.each do |file|
+        begin
+          file.reopen file.path, "a+"
+          file.sync = true
+        rescue ::Exception
+        end
+      end
+
+      [$stdout, $stderr].each do |io|
+        File.open(options[:logfile], 'ab') do |f|
+          io.reopen(f)
+        end
+        io.sync = true
+      end
+      $stdin.reopen('/dev/null')
+
+      initialize_logger
+    end
+
     def set_environment(cli_env)
       @environment = cli_env || ENV['RAILS_ENV'] || ENV['RACK_ENV'] || 'development'
     end
@@ -227,6 +258,10 @@ module Faktory
           opts[:concurrency] = Integer(arg)
         end
 
+        o.on '-d', '--daemon', "Daemonize process" do |arg|
+          opts[:daemon] = arg
+        end
+
         o.on '-e', '--environment ENV', "Application environment" do |arg|
           opts[:environment] = arg
         end
@@ -254,6 +289,10 @@ module Faktory
 
         o.on '-C', '--config PATH', "path to YAML config file" do |arg|
           opts[:config_file] = arg
+        end
+
+        o.on '-L', '--logfile PATH', "path to writable logfile" do |arg|
+          opts[:logfile] = arg
         end
 
         o.on '-V', '--version', "Print version and exit" do |arg|
